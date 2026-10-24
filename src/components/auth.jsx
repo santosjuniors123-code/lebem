@@ -1,15 +1,32 @@
 
 import { useState } from 'react';
+import { supabase } from '../lib/supabase';
+
+async function checkIsAdmin(userId) {
+  const { data, error } = await supabase
+    .from('app_admins')
+    .select('user_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) console.error('Erro ao encerrar sessão após falha administrativa:', signOutError);
+    throw error;
+  }
+  return Boolean(data);
+}
 
 export default function Auth({ onLogin }) {
   const [isLogin, setIsLogin] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     username: '',
     password: '',
     role: 'student',
   });
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
 
     const username = formData.username.trim();
@@ -17,49 +34,116 @@ export default function Auth({ onLogin }) {
 
     if (!username || !password) return;
 
-    try {
-      const users = JSON.parse(localStorage.getItem('app_users') || '[]');
+    if (!isLogin && password.length < 6) {
+      alert('A senha precisa ter pelo menos 6 caracteres.');
+      return;
+    }
 
-      if (!Array.isArray(users)) {
-        throw new Error('Dados inválidos');
-      }
+    setLoading(true);
+
+    try {
+      // Mantém o login por nome de usuário usando um e-mail interno.
+      // O usuário não precisa digitar um e-mail nesta tela.
+      const email = `${username.toLowerCase().replace(/\s+/g, '')}@lebem.app`;
 
       if (!isLogin) {
-        if (users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
-          alert('Esse usuário já existe.');
-          return;
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              name: username,
+              requested_role: formData.role,
+            },
+          },
+        });
+
+        if (error) throw error;
+
+        if (formData.role === 'teacher') {
+          alert(
+            'Solicitação enviada! Aguarde a aprovação do administrador.'
+          );
+        } else {
+          alert(
+            'Cadastro enviado! Se a confirmação de conta estiver ativada, será necessário confirmar o cadastro.'
+          );
         }
 
-        const newUser = {
-          id: crypto.randomUUID(),
-          username,
-          password,
-          role: formData.role,
-          xp: 0,
-          logs: [],
-          achievements: [],
-        };
+        if (data.session && data.user) {
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('id, name, role')
+            .eq('id', data.user.id)
+            .maybeSingle();
 
-        users.push(newUser);
-        localStorage.setItem('app_users', JSON.stringify(users));
-        alert('Conta criada! Agora entre com seu usuário e senha.');
-        setIsLogin(true);
+          if (profileError) throw profileError;
+          const isAdmin = await checkIsAdmin(data.user.id);
+
+          onLogin({
+            id: data.user.id,
+            username: profile?.name || username,
+            role: profile?.role || 'student',
+            isAdmin,
+            xp: 0,
+            logs: [],
+            achievements: [],
+          });
+        } else {
+          setIsLogin(true);
+        }
+
         return;
       }
 
-      const user = users.find(
-        (u) => u.username.toLowerCase() === username.toLowerCase()
-          && u.password === password
-      );
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-      if (!user) {
-        alert('Usuário ou senha incorretos.');
+      if (error) throw error;
+      if (!data.user) throw new Error('Não foi possível identificar a conta.');
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id, name, role')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (profileError) throw profileError;
+
+      if (!profile) {
+        await supabase.auth.signOut();
+        throw new Error(
+          'Perfil não encontrado. Confira o cadastro no Supabase.'
+        );
+      }
+
+      const isAdmin = await checkIsAdmin(data.user.id);
+
+      if (
+        formData.role === 'teacher' &&
+        profile.role !== 'teacher'
+      ) {
+        await supabase.auth.signOut();
+        alert('Sua conta ainda não tem aprovação como professor.');
         return;
       }
 
-      onLogin(user);
-    } catch {
-      alert('Não foi possível acessar os dados salvos neste navegador.');
+      onLogin({
+        id: data.user.id,
+        username: profile.name || username,
+        role: profile.role,
+        isAdmin,
+        xp: 0,
+        logs: [],
+        achievements: [],
+      });
+    } catch (error) {
+      console.error('Erro de autenticação:', error);
+      alert(error.message || 'Não foi possível acessar sua conta.');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -108,12 +192,12 @@ export default function Auth({ onLogin }) {
             id="password"
             type="password"
             autoComplete={isLogin ? 'current-password' : 'new-password'}
-            minLength={4}
+            minLength={6}
             value={formData.password}
             onChange={(e) =>
               setFormData({ ...formData, password: e.target.value })
             }
-            placeholder="Mínimo de 4 caracteres"
+            placeholder="Mínimo de 6 caracteres"
             required
           />
 
@@ -128,13 +212,21 @@ export default function Auth({ onLogin }) {
                 }
               >
                 <option value="student">Aluno</option>
-                <option value="teacher">Professor</option>
+                <option value="teacher">Professor (precisa de aprovação)</option>
               </select>
             </>
           )}
 
-          <button className="primary-button" type="submit">
-            {isLogin ? 'Entrar na minha jornada →' : 'Criar minha conta →'}
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={loading}
+          >
+            {loading
+              ? 'Aguarde...'
+              : isLogin
+                ? 'Entrar na minha jornada →'
+                : 'Criar minha conta →'}
           </button>
         </form>
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Auth from './components/auth';
+import AdminPanel from './components/AdminPanel';
 import { ACHIEVEMENTS, calculateStats } from './utils/gamelogics';
 import './App.css';
 
@@ -203,6 +204,24 @@ function App() {
   }
 
   if (!user) return <Auth onLogin={login} />;
+
+  if (user.isAdmin) {
+    return (
+      <div className="app-shell">
+        <header className="topbar">
+          <button className="brand" onClick={() => setPage('home')}>
+            📚 LêBem
+          </button>
+          <span className="role-chip">Administrador</span>
+          <button className="outline-button" onClick={logout}>Sair</button>
+        </header>
+        <main className="dashboard">
+          <AdminPanel />
+          <footer className="app-footer">LêBem · Cada página é uma conquista. 💚</footer>
+        </main>
+      </div>
+    );
+  }
 
   const isTeacher = user.role === 'teacher';
 
